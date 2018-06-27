@@ -66,6 +66,14 @@ function! s:shellslash(path) abort
   endif
 endfunction
 
+function! s:PlatformSlash(path) abort
+  if exists('+shellslash') && !&shellslash
+    return tr(a:path, '/', '\')
+  else
+    return a:path
+  endif
+endfunction
+
 let s:executables = {}
 
 function! s:executable(binary) abort
@@ -81,7 +89,7 @@ function! s:git_command() abort
   return get(g:, 'fugitive_git_command', g:fugitive_git_executable)
 endfunction
 
-function! fugitive#git_version(...) abort
+function! fugitive#GitVersion(...) abort
   if !has_key(s:git_versions, g:fugitive_git_executable)
     let s:git_versions[g:fugitive_git_executable] = matchstr(system(g:fugitive_git_executable.' --version'), "\\S\\+\n")
   endif
@@ -429,6 +437,25 @@ call s:add_methods('repo',['keywordprg'])
 
 " Section: Buffer
 
+function! s:UrlSplit(path) abort
+  let vals = matchlist(s:shellslash(a:path), '\c^fugitive://\(.\{-\}\)//\(\w\+\)\(/.*\)\=$')
+  if empty(vals)
+    return ['', '', '']
+  endif
+  return [vals[1], (vals[2] =~# '^.$' ? ':' : '') . vals[2], vals[3]]
+endfunction
+
+function! fugitive#Filename(url) abort
+  let [dir, rev, file] = s:UrlSplit(a:url)
+  if len(dir)
+    return s:PlatformSlash(FugitiveTreeForGitDir(dir) . file)
+  elseif a:url =~# '^[\\/]\|^\a:[\\/]'
+    return s:PlatformSlash(a:url)
+  else
+    return ''
+  endif
+endfunction
+
 let s:buffer_prototype = {}
 
 function! s:buffer(...) abort
@@ -698,7 +725,7 @@ function! s:Status(bang, count, mods) abort
   try
     exe (a:mods ==# '<mods>' ? '' : a:mods) 'Gpedit :'
     wincmd P
-    setlocal foldmethod=syntax foldlevel=1
+    setlocal foldmethod=syntax foldlevel=1 buftype=nowrite
     nnoremap <buffer> <silent> q    :<C-U>bdelete<CR>
   catch /^fugitive:/
     return 'echoerr v:errmsg'
@@ -1112,7 +1139,7 @@ function! s:RemoteComplete(A, L, P) abort
   return join(matches, "\n")
 endfunction
 
-function! fugitive#cwindow() abort
+function! fugitive#Cwindow() abort
   if &buftype == 'quickfix'
     cwindow
   else
@@ -1202,7 +1229,7 @@ function! s:Merge(cmd, bang, args) abort
       let e.pattern = '^<<<<<<<'
     endif
   endfor
-  call fugitive#cwindow()
+  call fugitive#Cwindow()
   if found
     call setqflist(qflist, 'r')
     if !a:bang
@@ -1604,7 +1631,7 @@ function! s:Dispatch(bang, args)
     else
       silent noautocmd make!
       redraw!
-      return 'call fugitive#cwindow()'
+      return 'call fugitive#Cwindow()'
     endif
     return ''
   finally
@@ -1638,7 +1665,7 @@ function! s:can_diffoff(buf) abort
         \ !empty(getwinvar(bufwinnr(a:buf), 'fugitive_diff_restore'))
 endfunction
 
-function! fugitive#can_diffoff(buf) abort
+function! fugitive#CanDiffoff(buf) abort
   return s:can_diffoff(a:buf)
 endfunction
 
@@ -1903,7 +1930,6 @@ augroup END
 
 augroup fugitive_blame
   autocmd!
-  autocmd BufReadPost *.fugitiveblame setfiletype fugitiveblame
   autocmd FileType fugitiveblame setlocal nomodeline | if exists('b:git_dir') | let &l:keywordprg = s:repo().keywordprg() | endif
   autocmd Syntax fugitiveblame call s:BlameSyntax()
   autocmd User Fugitive if s:buffer().type('file', 'blob') | exe "command! -buffer -bar -bang -range=0 -nargs=* Gblame :execute s:Blame(<bang>0,<line1>,<line2>,<count>,[<f-args>])" | endif
@@ -2004,7 +2030,7 @@ function! s:Blame(bang,line1,line2,count,args) abort
         if exists('+cursorbind')
           setlocal cursorbind
         endif
-        setlocal nomodified nomodifiable nonumber scrollbind nowrap foldcolumn=0 nofoldenable winfixwidth filetype=fugitiveblame
+        setlocal nomodified nomodifiable nonumber scrollbind nowrap foldcolumn=0 nofoldenable winfixwidth filetype=fugitiveblame buftype=nowrite
         if exists('+concealcursor')
           setlocal concealcursor=nc conceallevel=2
         endif
@@ -2289,7 +2315,7 @@ function! s:Browse(bang,line1,count,...) abort
     else
       let remote_for_url = remote
     endif
-    if fugitive#git_version() =~# '^[01]\.\|^2\.[0-6]\.'
+    if fugitive#GitVersion() =~# '^[01]\.\|^2\.[0-6]\.'
       let raw = s:repo().git_chomp('config','remote.'.remote_for_url.'.url')
     else
       let raw = s:repo().git_chomp('remote','get-url',remote_for_url)
@@ -2488,7 +2514,7 @@ function! fugitive#BufReadStatus() abort
     else
       let cd = exists('*haslocaldir') && haslocaldir() ? 'lcd' : 'cd'
       let dir = getcwd()
-      if fugitive#git_version() =~# '^0\|^1\.[1-7]\.'
+      if fugitive#GitVersion() =~# '^0\|^1\.[1-7]\.'
         let cmd = s:repo().git_command('status')
       else
         let cmd = s:repo().git_command(
